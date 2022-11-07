@@ -1,4 +1,8 @@
-use std::{ffi::OsString, path::Path, process::Command};
+use std::{
+    ffi::OsString,
+    path::Path,
+    process::{Command, ExitStatus},
+};
 
 /// Options provided for compiling binaries.
 struct CompileOption {
@@ -10,27 +14,26 @@ struct CompileOption {
 
 /// Result of compilation.
 struct CompileResult {
-    /// If compiler exits normally then `true`, else `false`.
-    pub success: bool,
-    /// Message from standard error stream of compiler process.
-    pub message: Vec<u8>,
+    /// Exit status of compiler process.
+    pub status: ExitStatus,
+    /// Output from standard error stream of compiler process.
+    pub stderr: Vec<u8>,
+    /// Output from standard output stream of compiler process.
+    pub stdout: Vec<u8>,
 }
 
 /// Compiles source inside directory with options.
 ///
 /// Returns a `CompileResult` object containing success flag and standard error stream data.
-fn compile_at(directory: &Path, option: &CompileOption) -> CompileResult {
+fn compile_at(directory: &Path, option: &CompileOption) -> std::io::Result<CompileResult> {
     Command::new(&option.compiler)
         .current_dir(directory)
         .args(option.args.iter().map(OsString::as_os_str))
         .output()
         .map(|output| CompileResult {
-            success: output.status.success(),
-            message: output.stderr,
-        })
-        .unwrap_or_else(|e| CompileResult {
-            success: false,
-            message: e.to_string().into_bytes(),
+            status: output.status,
+            stderr: output.stderr,
+            stdout: output.stdout,
         })
 }
 
@@ -45,9 +48,10 @@ mod test {
             compiler: "/usr/sbin/true".into(),
             args: vec![],
         };
-        let result = compile_at(current, &option);
-        assert!(result.success);
-        assert!(result.message.is_empty());
+        let result = compile_at(current, &option).unwrap();
+        assert!(result.status.success());
+        assert!(result.stderr.is_empty());
+        assert!(result.stdout.is_empty());
     }
 
     #[test]
@@ -57,9 +61,10 @@ mod test {
             compiler: "/usr/sbin/false".into(),
             args: vec![],
         };
-        let result = compile_at(current, &option);
-        assert!(!result.success);
-        assert!(result.message.is_empty());
+        let result = compile_at(current, &option).unwrap();
+        assert!(!result.status.success());
+        assert!(result.stderr.is_empty());
+        assert!(result.stdout.is_empty());
     }
 
     #[test]
@@ -69,8 +74,32 @@ mod test {
             compiler: "/usr/bin/bash".into(),
             args: vec!["-c".into(), "echo dummy_stderr 1>&2".into()],
         };
-        let result = compile_at(current, &option);
-        assert!(result.success);
-        assert_eq!(&result.message, b"dummy_stderr\n");
+        let result = compile_at(current, &option).unwrap();
+        assert!(result.status.success());
+        assert_eq!(&result.stderr, b"dummy_stderr\n");
+        assert!(result.stdout.is_empty());
+    }
+
+    #[test]
+    fn compile_get_stdout() {
+        let current = Path::new("./");
+        let option = CompileOption {
+            compiler: "/usr/bin/bash".into(),
+            args: vec!["-c".into(), "echo dummy_stdout".into()],
+        };
+        let result = compile_at(current, &option).unwrap();
+        assert!(result.status.success());
+        assert_eq!(&result.stdout, b"dummy_stdout\n");
+        assert!(result.stderr.is_empty());
+    }
+
+    #[test]
+    fn compile_fails() {
+        let current = Path::new("./");
+        let option = CompileOption {
+            compiler: "/this/path/should/not/exist".into(),
+            args: vec![],
+        };
+        assert!(compile_at(current, &option).is_err());
     }
 }
