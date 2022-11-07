@@ -61,4 +61,16 @@ mod test {
         assert!(!result.success);
         assert!(result.message.is_empty());
     }
+
+    #[test]
+    fn compile_get_stderr() {
+        let current = Path::new("./");
+        let option = CompileOption {
+            compiler: "/usr/bin/bash".into(),
+            args: vec!["-c".into(), "echo dummy_stderr 1>&2".into()],
+        };
+        let result = compile_at(current, &option);
+        assert!(result.success);
+        assert_eq!(&result.message, b"dummy_stderr\n");
+    }
 }
