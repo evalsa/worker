@@ -80,6 +80,7 @@ fn launch(nsjail: &Path, directory: &Path, option: &LaunchOption) -> std::io::Re
         .args(["-M", "e"]) // use execve
         .args(["-c".as_ref(), directory.as_os_str()]) // chroot to `directory`
         .args(["-H", "worker"]) // set hostname
+        .arg("-Q") // Log to stderr only fatal messages
         .args(["-t", &time])
         .args(["--rlimit_as", &virtual_memory])
         .args(["--rlimit_cpu", &time])
@@ -91,7 +92,8 @@ fn launch(nsjail: &Path, directory: &Path, option: &LaunchOption) -> std::io::Re
     if let Some(seccomp) = &option.seccomp {
         command.arg("--seccomp_string").arg(seccomp);
     }
-    command.output().map(|output| LaunchResult {
+    command.arg("--").arg(&option.binary).args(&option.args)
+    .output().map(|output| LaunchResult {
         status: output.status,
         stderr: output.stderr,
         stdout: output.stdout,
@@ -162,5 +164,26 @@ mod test {
             args: vec![],
         };
         assert!(compile_at(current, &option).is_err());
+    }
+
+    #[test]
+    fn nsjail_succeeds() {
+        let nsjail = Path::new("nsjail");
+        let directory = Path::new("./");
+        let option = LaunchOption {
+            binary: "/bin/bash".into(),
+            args: vec!["-c".into(), "pwd".into()],
+            stdin: vec![],
+            time: 1,
+            virtual_memory: 32,
+            files_size: 0,
+            proc_count: 1,
+            mount_proc: false,
+            seccomp: None,
+        };
+        let result = launch(nsjail, directory, &option).unwrap();
+        assert!(result.status.success());
+        assert_eq!(&result.stdout, b"/\n");
+        assert!(result.stderr.is_empty());
     }
 }
