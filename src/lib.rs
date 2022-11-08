@@ -37,6 +37,67 @@ fn compile_at(directory: &Path, option: &CompileOption) -> std::io::Result<Compi
         })
 }
 
+/// Options provided for binary launch.
+struct LaunchOption {
+    /// Path to binary to launch.
+    pub binary: OsString,
+    /// Arguments passed to the binary.
+    pub args: Vec<OsString>,
+    /// Standard input passed to the binary.
+    pub stdin: Vec<u8>,
+    /// Maximum time for the binary to execute, in seconds.
+    pub time: usize,
+    /// Maximum virtual memory size, in MiB.
+    pub virtual_memory: usize,
+    /// Maximum size of files created by the binary, in MiB.
+    pub files_size: usize,
+    /// Maximum number of processes created by the binary.
+    pub proc_count: usize,
+    /// If `true`, mount procfs to `/proc`.
+    pub mount_proc: bool,
+    /// Kafel seccomp-bpf policy to use.
+    pub seccomp: Option<String>,
+}
+
+/// Result of binary launch.
+struct LaunchResult {
+    /// Exit status of binary.
+    pub status: ExitStatus,
+    /// Output from standard error stream of binary.
+    pub stderr: Vec<u8>,
+    /// Output from standard output stream of binary.
+    pub stdout: Vec<u8>,
+}
+
+/// Launches a binary with given options in nsjail, change root to `directory`.
+fn launch(nsjail: &Path, directory: &Path, option: &LaunchOption) -> std::io::Result<LaunchResult> {
+    let time = option.time.to_string();
+    let virtual_memory = option.virtual_memory.to_string();
+    let files_size = option.files_size.to_string();
+    let proc_count = option.proc_count.to_string();
+    let mut command = Command::new(nsjail);
+    command
+        .args(["-M", "e"]) // use execve
+        .args(["-c".as_ref(), directory.as_os_str()]) // chroot to `directory`
+        .args(["-H", "worker"]) // set hostname
+        .args(["-t", &time])
+        .args(["--rlimit_as", &virtual_memory])
+        .args(["--rlimit_cpu", &time])
+        .args(["--rlimit_fsize", &files_size])
+        .args(["--rlimit_nproc", &proc_count]);
+    if !option.mount_proc {
+        command.arg("--disable_proc");
+    }
+    if let Some(seccomp) = &option.seccomp {
+        command.arg("--seccomp_string").arg(seccomp);
+    }
+    command.output().map(|output| LaunchResult {
+        status: output.status,
+        stderr: output.stderr,
+        stdout: output.stdout,
+    })
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
