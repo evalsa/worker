@@ -1,46 +1,31 @@
 use std::{
     ffi::OsString,
-    path::Path,
-    process::{Command, ExitStatus},
+    path::{Path, PathBuf},
+    process::{Command, Output},
 };
 
 /// Options provided for compiling binaries.
 struct CompileOption {
     /// File to execute when compile.
-    pub compiler: OsString,
+    pub compiler: PathBuf,
     /// Arguments passed to compiler process.
     pub args: Vec<OsString>,
-}
-
-/// Result of compilation.
-struct CompileResult {
-    /// Exit status of compiler process.
-    pub status: ExitStatus,
-    /// Output from standard error stream of compiler process.
-    pub stderr: Vec<u8>,
-    /// Output from standard output stream of compiler process.
-    pub stdout: Vec<u8>,
 }
 
 /// Compiles source inside directory with options.
 ///
 /// Returns a `CompileResult` object containing success flag and standard error stream data.
-fn compile_at(directory: &Path, option: &CompileOption) -> std::io::Result<CompileResult> {
+fn compile_at(directory: &Path, option: &CompileOption) -> std::io::Result<Output> {
     Command::new(&option.compiler)
         .current_dir(directory)
         .args(option.args.iter().map(OsString::as_os_str))
         .output()
-        .map(|output| CompileResult {
-            status: output.status,
-            stderr: output.stderr,
-            stdout: output.stdout,
-        })
 }
 
 /// Options provided for binary launch.
 struct LaunchOption {
     /// Path to binary to launch.
-    pub binary: OsString,
+    pub binary: PathBuf,
     /// Arguments passed to the binary.
     pub args: Vec<OsString>,
     /// Standard input passed to the binary.
@@ -59,18 +44,8 @@ struct LaunchOption {
     pub seccomp: Option<String>,
 }
 
-/// Result of binary launch.
-struct LaunchResult {
-    /// Exit status of binary.
-    pub status: ExitStatus,
-    /// Output from standard error stream of binary.
-    pub stderr: Vec<u8>,
-    /// Output from standard output stream of binary.
-    pub stdout: Vec<u8>,
-}
-
 /// Launches a binary with given options in nsjail, change root to `directory`.
-fn launch(nsjail: &Path, directory: &Path, option: &LaunchOption) -> std::io::Result<LaunchResult> {
+fn launch(nsjail: &Path, directory: &Path, option: &LaunchOption) -> std::io::Result<Output> {
     let time = option.time.to_string();
     let virtual_memory = option.virtual_memory.to_string();
     let files_size = option.files_size.to_string();
@@ -92,12 +67,11 @@ fn launch(nsjail: &Path, directory: &Path, option: &LaunchOption) -> std::io::Re
     if let Some(seccomp) = &option.seccomp {
         command.arg("--seccomp_string").arg(seccomp);
     }
-    command.arg("--").arg(&option.binary).args(&option.args)
-    .output().map(|output| LaunchResult {
-        status: output.status,
-        stderr: output.stderr,
-        stdout: output.stdout,
-    })
+    command
+        .arg("--")
+        .arg(&option.binary)
+        .args(&option.args)
+        .output()
 }
 
 #[cfg(test)]
