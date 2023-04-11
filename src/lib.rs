@@ -5,7 +5,7 @@ use std::{
 };
 
 /// Options provided for compiling binaries.
-struct CompileOption {
+pub struct CompileOption {
     /// File to execute when compile.
     pub compiler: PathBuf,
     /// Arguments passed to compiler process.
@@ -15,7 +15,7 @@ struct CompileOption {
 /// Compiles source inside directory with options.
 ///
 /// Returns a `CompileResult` object containing success flag and standard error stream data.
-fn compile_at(directory: &Path, option: &CompileOption) -> std::io::Result<Output> {
+pub fn compile_at(directory: &Path, option: &CompileOption) -> std::io::Result<Output> {
     Command::new(&option.compiler)
         .current_dir(directory)
         .args(option.args.iter().map(OsString::as_os_str))
@@ -23,7 +23,7 @@ fn compile_at(directory: &Path, option: &CompileOption) -> std::io::Result<Outpu
 }
 
 /// Options provided for binary launch.
-struct LaunchOption {
+pub struct LaunchOption {
     /// Path to binary to launch.
     pub binary: PathBuf,
     /// Arguments passed to the binary.
@@ -45,7 +45,7 @@ struct LaunchOption {
 }
 
 /// Launches a binary with given options in nsjail, change root to `directory`.
-fn launch(nsjail: &Path, directory: &Path, option: &LaunchOption) -> std::io::Result<Output> {
+pub fn launch(nsjail: &Path, directory: &Path, option: &LaunchOption) -> std::io::Result<Output> {
     let time = option.time.to_string();
     let virtual_memory = option.virtual_memory.to_string();
     let files_size = option.files_size.to_string();
