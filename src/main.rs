@@ -2,8 +2,9 @@ use std::{fs, path::Path};
 
 use clap::Parser;
 use evalsa_worker::{compile_at, launch, CompileOption, LaunchOption};
-use evalsa_worker_proto::{RouterBound, Run, RunResult};
+use evalsa_worker_proto::{ApiBound, Finished, Run, RunResult};
 use tempfile::tempdir;
+use zmq::Message;
 
 #[derive(Parser, Debug)]
 #[command(version)]
@@ -18,25 +19,27 @@ fn main() {
 
     let ctx = zmq::Context::new();
 
-    let socket = ctx.socket(zmq::DEALER).unwrap();
+    let socket = ctx.socket(zmq::REQ).unwrap();
     socket.connect(&args.host).unwrap();
 
-    let capability = bincode::serialize(&RouterBound::Capability {
-        languages: vec!["rust".into()],
-    })
-    .unwrap();
-    socket.send(capability, 0).unwrap();
-
+    let languages = vec!["rust".into()];
+    let mut msg = Message::new();
     loop {
-        let idle = bincode::serialize(&RouterBound::Idle).unwrap();
+        let idle = bincode::serialize(&ApiBound::Idle {
+            languages: languages.clone(),
+        })
+        .unwrap();
         socket.send(idle, 0).unwrap();
-        let enqueue: Run = bincode::deserialize(&socket.recv_bytes(0).unwrap()).unwrap();
-        if enqueue.language != "rust" {
-            let reject = bincode::serialize(&RouterBound::Reject).unwrap();
-            socket.send(reject, 0).unwrap();
+        socket.recv(&mut msg, 0).unwrap();
+        let enqueue: Run = bincode::deserialize(&msg).unwrap();
+        if !languages.contains(&enqueue.language) {
+            bincode::serialize_into(msg.as_mut(), &ApiBound::Reject).unwrap();
+            socket.send(msg.as_ref(), 0).unwrap();
             continue;
         }
         {
+            bincode::serialize_into(msg.as_mut(), &ApiBound::Fetched).unwrap();
+            socket.send(msg.as_ref(), 0).unwrap();
             let temp = tempdir().unwrap();
             let src = temp.path().join("main.rs");
             fs::write(&src, enqueue.code).unwrap();
@@ -66,23 +69,31 @@ fn main() {
             )
             .unwrap();
             if output.status.success() {
-                let finished = bincode::serialize(&RouterBound::Finished {
-                    result: RunResult::Success,
-                    exit_code: output.status.code(),
-                    stdout: output.stdout,
-                    stderr: output.stderr,
-                })
+                bincode::serialize_into(
+                    msg.as_mut(),
+                    &ApiBound::Finished(Finished {
+                        id: enqueue.id,
+                        result: RunResult::Success,
+                        exit_code: output.status.code(),
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                    }),
+                )
                 .unwrap();
-                socket.send(finished, 0).unwrap();
+                socket.send(msg.as_ref(), 0).unwrap();
             } else {
-                let finished = bincode::serialize(&RouterBound::Finished {
-                    result: RunResult::RuntimeError,
-                    exit_code: output.status.code(),
-                    stdout: output.stdout,
-                    stderr: output.stderr,
-                })
+                bincode::serialize_into(
+                    msg.as_mut(),
+                    &ApiBound::Finished(Finished {
+                        id: enqueue.id,
+                        result: RunResult::RuntimeError,
+                        exit_code: output.status.code(),
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                    }),
+                )
                 .unwrap();
-                socket.send(finished, 0).unwrap();
+                socket.send(msg.as_ref(), 0).unwrap();
             }
         }
     }
