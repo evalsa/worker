@@ -33,13 +33,15 @@ fn main() {
         socket.recv(&mut msg, 0).unwrap();
         let enqueue: Run = bincode::deserialize(&msg).unwrap();
         if !languages.contains(&enqueue.language) {
-            bincode::serialize_into(msg.as_mut(), &ApiBound::Reject).unwrap();
-            socket.send(msg.as_ref(), 0).unwrap();
+            let serialized = bincode::serialize(&ApiBound::Reject { id: enqueue.id }).unwrap();
+            socket.send(&serialized, 0).unwrap();
+            socket.recv(&mut msg, 0).unwrap();
             continue;
         }
         {
-            bincode::serialize_into(msg.as_mut(), &ApiBound::Fetched).unwrap();
-            socket.send(msg.as_ref(), 0).unwrap();
+            let serialized = bincode::serialize(&ApiBound::Fetched).unwrap();
+            socket.send(&serialized, 0).unwrap();
+            socket.recv(&mut msg, 0).unwrap();
             let temp = tempdir().unwrap();
             let src = temp.path().join("main.rs");
             fs::write(&src, enqueue.code).unwrap();
@@ -82,18 +84,16 @@ fn main() {
                 .unwrap();
                 socket.send(msg.as_ref(), 0).unwrap();
             } else {
-                bincode::serialize_into(
-                    msg.as_mut(),
-                    &ApiBound::Finished(Finished {
-                        id: enqueue.id,
-                        result: RunResult::RuntimeError,
-                        exit_code: output.status.code(),
-                        stdout: output.stdout,
-                        stderr: output.stderr,
-                    }),
-                )
+                let serialized = bincode::serialize(&ApiBound::Finished(Finished {
+                    id: enqueue.id,
+                    result: RunResult::RuntimeError,
+                    exit_code: output.status.code(),
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                }))
                 .unwrap();
-                socket.send(msg.as_ref(), 0).unwrap();
+                socket.send(&serialized, 0).unwrap();
+                socket.recv(&mut msg, 0).unwrap();
             }
         }
     }
