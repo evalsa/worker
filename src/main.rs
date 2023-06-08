@@ -14,7 +14,7 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    let rustc = Path::new("rustc");
+    let rustc = Path::new("/usr/bin/rustc");
     let nsjail = Path::new("nsjail");
 
     let ctx = zmq::Context::new();
@@ -56,7 +56,7 @@ fn main() {
             let bin = temp.path().join("main");
             let output = launch(
                 nsjail,
-                &src,
+                temp.path(),
                 &LaunchOption {
                     binary: bin,
                     args: vec![],
@@ -71,19 +71,17 @@ fn main() {
             )
             .unwrap();
             if output.status.success() {
-                bincode::serialize_into(
-                    msg.as_mut(),
-                    &ApiBound::Finished(Finished {
-                        id: enqueue.id,
-                        result: RunResult::Success,
-                        exit_code: output.status.code(),
-                        stdout: output.stdout,
-                        stderr: output.stderr,
-                    }),
-                )
+                let serialized = bincode::serialize(&ApiBound::Finished(Finished {
+                    id: enqueue.id,
+                    result: RunResult::Success,
+                    exit_code: output.status.code(),
+                    stdout: output.stdout,
+                    stderr: output.stderr,
+                }))
                 .unwrap();
-                socket.send(msg.as_ref(), 0).unwrap();
+                socket.send(&serialized, 0).unwrap();
             } else {
+                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
                 let serialized = bincode::serialize(&ApiBound::Finished(Finished {
                     id: enqueue.id,
                     result: RunResult::RuntimeError,
@@ -93,8 +91,8 @@ fn main() {
                 }))
                 .unwrap();
                 socket.send(&serialized, 0).unwrap();
-                socket.recv(&mut msg, 0).unwrap();
             }
+            socket.recv(&mut msg, 0).unwrap();
         }
     }
 }

@@ -52,9 +52,13 @@ pub fn launch(nsjail: &Path, directory: &Path, option: &LaunchOption) -> std::io
     let proc_count = option.proc_count.to_string();
     let mut command = Command::new(nsjail);
     command
-        .args(["-M", "e"]) // use execve
+        .args(["-Me"]) // use execve
         .args(["-c".as_ref(), directory.as_os_str()]) // chroot to `directory`
         .args(["-H", "worker"]) // set hostname
+        .args(["-R".as_ref(), option.binary.as_path()])
+        .args(["-R", "/lib"])
+        .args(["-R", "/lib64"])
+        .args(["-R", "/usr"])
         .arg("-Q") // Log to stderr only fatal messages
         .args(["-t", &time])
         .args(["--rlimit_as", &virtual_memory])
