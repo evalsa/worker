@@ -1,98 +1,80 @@
-use std::{fs, path::Path};
+use amiquip::{
+    Connection, ConsumerMessage, ConsumerOptions, Exchange, Publish, QueueDeclareOptions,
+};
+use evalsa_worker::{launch, Language, LaunchOption, LaunchStatus, Sandbox};
+use evalsa_worker_proto::{Finished, Run, RunResult, Running, RunningState};
+use serde::Deserialize;
 
-use clap::Parser;
-use evalsa_worker::{compile_at, launch, CompileOption, LaunchOption};
-use evalsa_worker_proto::{ApiBound, Finished, Run, RunResult};
-use tempfile::tempdir;
-use zmq::Message;
-
-#[derive(Parser, Debug)]
-#[command(version)]
-struct Args {
-    host: String,
+#[derive(Deserialize, Debug)]
+struct Config {
+    languages: Vec<Language>,
+    sandbox: Sandbox,
 }
 
 fn main() {
-    let args = Args::parse();
-    let rustc = Path::new("/usr/bin/rustc");
-    let nsjail = Path::new("nsjail");
-
-    let ctx = zmq::Context::new();
-
-    let socket = ctx.socket(zmq::REQ).unwrap();
-    socket.connect(&args.host).unwrap();
-
-    let languages = vec!["rust".into()];
-    let mut msg = Message::new();
-    loop {
-        let idle = bincode::serialize(&ApiBound::Idle {
-            languages: languages.clone(),
-        })
+    let config_file = std::fs::read_to_string("config.toml").unwrap();
+    let config: Config = toml::from_str(&config_file).unwrap();
+    let mut connection = Connection::insecure_open("amqp://localhost:5672").unwrap();
+    let channel = connection.open_channel(None).unwrap();
+    channel
+        .queue_declare("apibound", QueueDeclareOptions::default())
         .unwrap();
-        socket.send(idle, 0).unwrap();
-        socket.recv(&mut msg, 0).unwrap();
-        let enqueue: Run = bincode::deserialize(&msg).unwrap();
-        if !languages.contains(&enqueue.language) {
-            let serialized = bincode::serialize(&ApiBound::Reject { id: enqueue.id }).unwrap();
-            socket.send(&serialized, 0).unwrap();
-            socket.recv(&mut msg, 0).unwrap();
-            continue;
-        }
-        {
-            let serialized = bincode::serialize(&ApiBound::Fetched).unwrap();
-            socket.send(&serialized, 0).unwrap();
-            socket.recv(&mut msg, 0).unwrap();
-            let temp = tempdir().unwrap();
-            let src = temp.path().join("main.rs");
-            fs::write(&src, enqueue.code).unwrap();
-            compile_at(
-                temp.path(),
-                &CompileOption {
-                    compiler: rustc.to_path_buf(),
-                    args: vec!["-O".into(), src.as_os_str().into()],
-                },
-            )
-            .unwrap();
-            let bin = temp.path().join("main");
-            let output = launch(
-                nsjail,
-                temp.path(),
-                &LaunchOption {
-                    binary: bin,
-                    args: vec![],
-                    stdin: vec![],
-                    time: 1,
-                    virtual_memory: 16,
-                    files_size: 0,
-                    proc_count: 1,
-                    mount_proc: false,
-                    seccomp: None,
-                },
-            )
-            .unwrap();
-            if output.status.success() {
-                let serialized = bincode::serialize(&ApiBound::Finished(Finished {
-                    id: enqueue.id,
-                    result: RunResult::Success,
-                    exit_code: output.status.code(),
-                    stdout: output.stdout,
-                    stderr: output.stderr,
-                }))
-                .unwrap();
-                socket.send(&serialized, 0).unwrap();
-            } else {
-                eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-                let serialized = bincode::serialize(&ApiBound::Finished(Finished {
-                    id: enqueue.id,
-                    result: RunResult::RuntimeError,
-                    exit_code: output.status.code(),
-                    stdout: output.stdout,
-                    stderr: output.stderr,
-                }))
-                .unwrap();
-                socket.send(&serialized, 0).unwrap();
+    let workerbound = channel
+        .queue_declare("workerbound", QueueDeclareOptions::default())
+        .unwrap();
+    let apibound = Exchange::direct(&channel);
+    let consumer = workerbound.consume(ConsumerOptions::default()).unwrap();
+
+    for message in consumer.receiver().iter() {
+        match message {
+            ConsumerMessage::Delivery(delivery) => {
+                let run: Run = ciborium::from_reader(delivery.body.as_slice()).unwrap();
+                if let Some(language) = config.languages.iter().find(|&l| l.name == run.language) {
+                    delivery.ack(&channel).unwrap();
+                    let mut body = vec![];
+                    ciborium::into_writer(
+                        &Running {
+                            id: run.id,
+                            state: RunningState::Fetched,
+                        },
+                        &mut body,
+                    )
+                    .unwrap();
+                    apibound.publish(Publish::new(&body, "apibound")).unwrap();
+                    let result = launch(
+                        &run.code,
+                        &run.stdin,
+                        language,
+                        &config.sandbox,
+                        &LaunchOption {
+                            timeout: 1000,
+                            max_virtual_memory: 1 << 30,
+                        },
+                    );
+                    let mut body = vec![];
+                    let run_result = match result.status {
+                        LaunchStatus::Exit(code) => RunResult::Exit(code),
+                        LaunchStatus::CompilationError => RunResult::CompilationError,
+                        LaunchStatus::RuntimeError => RunResult::RuntimeError,
+                        LaunchStatus::OutputLimitExceeded => RunResult::OutputLimitExceeded,
+                        LaunchStatus::TimeLimitExceeded => RunResult::TimeLimitExceeded,
+                    };
+                    ciborium::into_writer(
+                        &Running {
+                            id: run.id,
+                            state: RunningState::Finished(Finished {
+                                result: run_result,
+                                stdout: result.stdout,
+                                stderr: result.stderr,
+                            }),
+                        },
+                        &mut body,
+                    )
+                    .unwrap();
+                    apibound.publish(Publish::new(&body, "apibound")).unwrap();
+                }
             }
-            socket.recv(&mut msg, 0).unwrap();
+            _ => break,
         }
     }
 }
