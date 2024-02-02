@@ -53,7 +53,11 @@ fn main() {
                     );
                     let mut body = vec![];
                     let run_result = match result.status {
-                        LaunchStatus::Exit(code) => RunResult::Exit(code),
+                        LaunchStatus::Exit(code) => RunResult::Exit {
+                            exit_code: code,
+                            cpu_time: result.user_time_ms as i32,
+                            memory: result.memory_kib as i32,
+                        },
                         LaunchStatus::CompilationError => RunResult::CompilationError,
                         LaunchStatus::RuntimeError => RunResult::RuntimeError,
                         LaunchStatus::OutputLimitExceeded => RunResult::OutputLimitExceeded,
